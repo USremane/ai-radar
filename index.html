@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>AI 战术雷达</title>
+
+    <!-- ===== PWA 关键配置 ===== -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="雷达">
+    <meta name="theme-color" content="#050a15">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' fill='%23050a15'/%3E%3Ccircle cx='90' cy='90' r='65' fill='none' stroke='%2300ffff' stroke-width='4'/%3E%3Ccircle cx='90' cy='90' r='38' fill='none' stroke='%2300ffff' stroke-width='2' opacity='0.5'/%3E%3Ccircle cx='90' cy='90' r='6' fill='%2300ffff'/%3E%3C/svg%3E">
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; touch-action: none; }
+        body { background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; width: 100vw; height: 100vh; }
+
+        #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; background: #000; z-index: 1; }
+        #video { display: none; }
+
+        #ui-layer { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 50; text-align: center; background: #050a15; padding: 20px; }
+        #status { margin-bottom: 10px; font-size: 22px; color: #00ffff; text-shadow: 0 0 15px rgba(0,255,255,0.8); font-weight: bold; }
+        #sub-status { font-size: 14px; color: #cbd5e1; margin-bottom: 25px; max-width: 300px; line-height: 1.6; }
+
+        .loader { width: 40px; height: 40px; border: 3px solid rgba(0, 255, 255, 0.2); border-top-color: #00ffff; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .btn { background: linear-gradient(135deg, #00ffff, #0055ff); color: #fff; border: none; padding: 15px 40px; font-size: 16px; border-radius: 50px; font-weight: bold; box-shadow: 0 10px 20px rgba(0,255,255,0.3); }
+        .btn:active { transform: scale(0.95); }
+
+        #dynamic-island { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); background: rgba(10, 15, 25, 0.85); border: 1px solid rgba(0, 255, 255, 0.4); border-radius: 30px; display: none; flex-direction: column; align-items: center; z-index: 100; backdrop-filter: blur(12px); box-shadow: 0 10px 30px rgba(0,0,0,0.8); transition: all 0.3s ease; overflow: hidden; }
+        .island-collapsed { width: 220px; height: 40px; border-radius: 20px; }
+        .island-expanded { width: 280px; height: auto; padding-bottom: 15px; border-radius: 20px; background: rgba(5, 10, 20, 0.95); border-color: #00ffff; }
+        .island-header { width: 100%; height: 40px; display: flex; justify-content: center; align-items: center; gap: 10px; color: #00ffff; font-size: 14px; font-weight: bold; white-space: nowrap; }
+        .radar-ping { width: 8px; height: 8px; background: #00ffff; border-radius: 50%; box-shadow: 0 0 10px #00ffff; animation: pulse 1.5s infinite; flex-shrink: 0; }
+        @keyframes pulse { 0% { transform: scale(0.8); opacity: 0.5; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(0.8); opacity: 0.5; } }
+        #island-panel { display: none; width: 100%; padding: 10px 20px; flex-direction: column; gap: 12px; border-top: 1px solid rgba(0, 255, 255, 0.2); margin-top: 5px; }
+        .panel-item { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #cbd5e1; }
+        .switch { position: relative; width: 36px; height: 18px; background: rgba(255,255,255,0.15); border-radius: 9px; }
+        .switch input { display: none; }
+        .switch .slider { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: #94a3b8; border-radius: 50%; transition: 0.3s; }
+        .switch input:checked + .slider { transform: translateX(18px); background: #00ffff; box-shadow: 0 0 10px #00ffff; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="loader" id="loadingIcon" style="display:none;"></div>
+        <div id="status">AI 战术雷达</div>
+        <div id="sub-status">点击下方按钮启动摄像头与 AI 引擎</div>
+        <button class="btn" id="retryBtn">开始扫描</button>
+    </div>
+
+    <video id="video" autoplay muted playsinline webkit-playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <div id="dynamic-island" class="island-collapsed">
+        <div class="island-header" id="islandHeader">
+            <div class="radar-ping"></div>
+            <span id="islandText">正在连接...</span>
+        </div>
+        <div id="island-panel">
+            <div class="panel-item"><span>物品名称识别</span><label class="switch"><input type="checkbox" id="sw-ai" checked><div class="slider"></div></label></div>
+            <div class="panel-item"><span>雷达拓扑连线</span><label class="switch"><input type="checkbox" id="sw-lines" checked><div class="slider"></div></label></div>
+        </div>
+    </div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const subStatus = document.getElementById('sub-status');
+    const retryBtn = document.getElementById('retryBtn');
+    const loadingIcon = document.getElementById('loadingIcon');
+    const uiLayer = document.getElementById('ui-layer');
+
+    const island = document.getElementById('dynamic-island');
+    const islandText = document.getElementById('islandText');
+    const islandPanel = document.getElementById('island-panel');
+    const swAI = document.getElementById('sw-ai');
+    const swLines = document.getElementById('sw-lines');
+
+    let model = null;
+    let isAIActive = true, isLinesActive = true;
+    let lastBoxes = [];
+    let lastInferTime = 0;
+    const INFER_INTERVAL = 200;
+
+    const ZH_NAMES = {
+        'person': '人', 'bicycle': '自行车', 'car': '汽车', 'motorcycle': '摩托车',
+        'airplane': '飞机', 'bus': '公交车', 'train': '火车', 'truck': '卡车',
+        'boat': '船', 'traffic light': '红绿灯', 'fire hydrant': '消防栓',
+        'stop sign': '停止标志', 'bird': '鸟', 'cat': '猫', 'dog': '狗',
+        'horse': '马', 'sheep': '羊', 'cow': '牛', 'elephant': '大象',
+        'bear': '熊', 'zebra': '斑马', 'giraffe': '长颈鹿', 'backpack': '背包',
+        'umbrella': '雨伞', 'handbag': '手提包', 'suitcase': '行李箱',
+        'bottle': '瓶子', 'wine glass': '酒杯', 'cup': '杯子', 'fork': '叉子',
+        'knife': '刀', 'spoon': '勺子', 'bowl': '碗', 'banana': '香蕉',
+        'apple': '苹果', 'sandwich': '三明治', 'orange': '橙子', 'broccoli': '西兰花',
+        'chair': '椅子', 'couch': '沙发', 'bed': '床', 'dining table': '餐桌',
+        'toilet': '马桶', 'tv': '电视', 'laptop': '笔记本', 'mouse': '鼠标',
+        'remote': '遥控器', 'keyboard': '键盘', 'cell phone': '手机',
+        'microwave': '微波炉', 'oven': '烤箱', 'book': '书', 'clock': '时钟',
+        'scissors': '剪刀', 'teddy bear': '泰迪熊'
+    };
+
+    const OBJECT_HEIGHTS = {
+        'person': 1.7, 'bicycle': 1.0, 'car': 1.5, 'motorcycle': 1.1,
+        'bus': 3.2, 'truck': 3.0, 'cell phone': 0.15, 'laptop': 0.25,
+        'cup': 0.12, 'bottle': 0.25, 'chair': 0.9, 'book': 0.2, 'backpack': 0.4
+    };
+
+    function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ===== 防止息屏 =====
+    let wakeLock = null;
+    async function requestWakeLock() {
+        try {
+            if ('wakeLock' in navigator) {
+                wakeLock = await navigator.wakeLock.request('screen');
+                wakeLock.addEventListener('release', () => console.log('wakeLock released'));
+            }
+        } catch (e) { console.warn('WakeLock 失败', e); }
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && model) requestWakeLock();
+    });
+
+    function loadScript(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error('加载失败: ' + src));
+            document.head.appendChild(script);
+        });
+    }
+
+    async function loadLibraries() {
+        const tfUrls = [
+            'https://cdn.bootcdn.net/ajax/libs/tensorflow/4.10.0/tf.min.js',
+            'https://cdn.staticfile.org/tensorflow.js/3.13.0/tf.min.js',
+            'https://lf3-cdn-tos.bytecdntp.com/cdn/expire-1-M/tensorflow.js/3.13.0/tf.min.js'
+        ];
+        const cocoUrls = [
+            'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js',
+            'https://cdn.bootcdn.net/ajax/libs/tensorflow-models/2.2.2/coco-ssd.min.js',
+            'https://lf3-cdn-tos.bytecdntp.com/cdn/expire-1-M/tensorflow-models/coco-ssd/2.2.2/coco-ssd.min.js'
+        ];
+
+        let tfLoaded = false;
+        for (let url of tfUrls) {
+            if (tfLoaded) break;
+            try { await loadScript(url); tfLoaded = true; } catch(e) { console.warn(e); }
+        }
+        if (!tfLoaded) throw new Error("TF 库加载失败，请检查网络");
+
+        let cocoLoaded = false;
+        for (let url of cocoUrls) {
+            if (cocoLoaded) break;
+            try { await loadScript(url); cocoLoaded = true; } catch(e) { console.warn(e); }
+        }
+        if (!cocoLoaded) throw new Error("AI 模型库加载失败，请检查网络");
+    }
+
+    async function init() {
+        retryBtn.style.display = 'none';
+        loadingIcon.style.display = 'block';
+        statusDiv.innerText = 'AI 视觉矩阵';
+
+        try {
+            subStatus.innerText = '1/3 正在连接核心库...';
+            await loadLibraries();
+
+            subStatus.innerText = '2/3 正在请求摄像头权限...';
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+            });
+            video.srcObject = stream;
+            await new Promise(resolve => {
+                if (video.readyState >= 1) resolve();
+                else video.onloadedmetadata = resolve;
+            });
+            try { await video.play(); } catch(e) { console.warn('play()', e); }
+
+            subStatus.innerText = '3/3 正在下载 AI 模型(约 5MB)...';
+            model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+
+            subStatus.innerText = '引擎就绪，正在启动雷达...';
+            requestWakeLock();
+
+            setTimeout(() => {
+                uiLayer.style.transition = 'opacity 0.5s';
+                uiLayer.style.opacity = '0';
+                setTimeout(() => {
+                    uiLayer.style.display = 'none';
+                    island.style.display = 'flex';
+                }, 500);
+            }, 500);
+
+            requestAnimationFrame(processFrame);
+        } catch (e) {
+            console.error(e);
+            loadingIcon.style.display = 'none';
+            statusDiv.innerText = '启动失败';
+            subStatus.innerHTML = `<span style="color:#f44;">${e.message}</span><br>请检查摄像头权限和网络`;
+            retryBtn.style.display = 'block';
+            retryBtn.innerText = '重试';
+        }
+    }
+
+    retryBtn.addEventListener('click', init);
+
+    // 灵动岛交互
+    let isExpanded = false;
+    island.addEventListener('click', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.classList.contains('slider')) return;
+        isExpanded = !isExpanded;
+        if (isExpanded) {
+            island.classList.remove('island-collapsed');
+            island.classList.add('island-expanded');
+            islandPanel.style.display = 'flex';
+        } else {
+            island.classList.add('island-collapsed');
+            island.classList.remove('island-expanded');
+            islandPanel.style.display = 'none';
+        }
+    });
+
+    swAI.addEventListener('change', e => { isAIActive = e.target.checked; if(!isAIActive) lastBoxes = []; });
+    swLines.addEventListener('change', e => isLinesActive = e.target.checked);
+
+    async function processFrame(timestamp) {
+        const videoRatio = video.videoWidth / video.videoHeight;
+        const canvasRatio = canvas.width / canvas.height;
+        let drawW, drawH, offsetX, offsetY;
+
+        if (canvasRatio > videoRatio) {
+            drawW = canvas.width; drawH = canvas.width / videoRatio;
+            offsetX = 0; offsetY = (canvas.height - drawH) / 2;
+        } else {
+            drawH = canvas.height; drawW = canvas.height * videoRatio;
+            offsetX = (canvas.width - drawW) / 2; offsetY = 0;
+        }
+
+        ctx.drawImage(video, offsetX, offsetY, drawW, drawH);
+
+        if (isAIActive && model && (timestamp - lastInferTime > INFER_INTERVAL)) {
+            lastInferTime = timestamp;
+
+            model.detect(video).then(predictions => {
+                let newBoxes = [];
+                predictions.forEach(pred => {
+                    if (pred.score > 0.4) {
+                        newBoxes.push({ bbox: pred.bbox, class: pred.class, score: pred.score });
+                    }
+                });
+
+                if (lastBoxes.length > 0) {
+                    newBoxes.forEach(nb => {
+                        let match = lastBoxes.find(lb => lb.class === nb.class);
+                        if (match) {
+                            nb.bbox[0] = match.bbox[0] + (nb.bbox[0] - match.bbox[0]) * 0.5;
+                            nb.bbox[1] = match.bbox[1] + (nb.bbox[1] - match.bbox[1]) * 0.5;
+                            nb.bbox[2] = match.bbox[2] + (nb.bbox[2] - match.bbox[2]) * 0.5;
+                            nb.bbox[3] = match.bbox[3] + (nb.bbox[3] - match.bbox[3]) * 0.5;
+                        }
+                    });
+                }
+                lastBoxes = newBoxes;
+
+                islandText.innerText = lastBoxes.length > 0 ? `检测到 ${lastBoxes.length} 个目标` : '扫描中... 暂无目标';
+                const ping = island.querySelector('.radar-ping');
+                if (lastBoxes.length > 0) {
+                    ping.style.background = '#00ff00'; ping.style.boxShadow = '0 0 10px #00ff00';
+                } else {
+                    ping.style.background = '#00ffff'; ping.style.boxShadow = '0 0 10px #00ffff';
+                }
+            }).catch(err => console.warn("推理错误", err));
+        }
+
+        if (isAIActive && lastBoxes.length > 0) {
+            const islandRect = island.getBoundingClientRect();
+            const startX = islandRect.left + islandRect.width / 2;
+            const startY = islandRect.bottom;
+
+            lastBoxes.forEach(pred => {
+                const [x, y, w, h] = pred.bbox;
+                const className = pred.class;
+                const zhName = ZH_NAMES[className] || className;
+
+                const scaleX = drawW / video.videoWidth;
+                const scaleY = drawH / video.videoHeight;
+
+                const drawX = offsetX + x * scaleX;
+                const drawY = offsetY + y * scaleY;
+                const drawW2 = w * scaleX;
+                const drawH2 = h * scaleY;
+                const targetX = drawX + drawW2 / 2;
+                const targetY = drawY + drawH2 / 2;
+
+                if (isLinesActive) {
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    const cpX = (startX + targetX) / 2;
+                    const cpY = (startY + targetY) / 2 - 50;
+                    ctx.quadraticCurveTo(cpX, cpY, targetX, targetY);
+                    ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]);
+                    ctx.beginPath(); ctx.arc(targetX, targetY, 3, 0, Math.PI * 2); ctx.fillStyle = '#ff0000'; ctx.fill();
+                }
+
+                ctx.strokeStyle = 'rgba(0, 255, 0, 0.9)'; ctx.lineWidth = 2;
+                const lineLen = Math.min(drawW2, drawH2) * 0.2;
+                ctx.beginPath();
+                ctx.moveTo(drawX, drawY + lineLen); ctx.lineTo(drawX, drawY); ctx.lineTo(drawX + lineLen, drawY);
+                ctx.moveTo(drawX + drawW2 - lineLen, drawY); ctx.lineTo(drawX + drawW2, drawY); ctx.lineTo(drawX + drawW2, drawY + lineLen);
+                ctx.moveTo(drawX, drawY + drawH2 - lineLen); ctx.lineTo(drawX, drawY + drawH2); ctx.lineTo(drawX + lineLen, drawY + drawH2);
+                ctx.moveTo(drawX + drawW2 - lineLen, drawY + drawH2); ctx.lineTo(drawX + drawW2, drawY + drawH2); ctx.lineTo(drawX + drawW2, drawY + drawH2 - lineLen);
+                ctx.stroke();
+
+                let text = zhName;
+                const realHeight = OBJECT_HEIGHTS[className] || 0.5;
+                const focalLength = canvas.width * 1.2;
+                let distance = (focalLength * realHeight) / h;
+                if (distance > 0.2 && distance < 30) {
+                    text += ` [${distance.toFixed(1)}m]`;
+                }
+
+                ctx.font = 'bold 14px monospace';
+                const textWidth = ctx.measureText(text).width;
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                ctx.fillRect(drawX, drawY - 24, textWidth + 12, 22);
+                ctx.fillStyle = '#00ffff';
+                ctx.fillText(text, drawX + 6, drawY - 8);
+            });
+        }
+
+        requestAnimationFrame(processFrame);
+    }
+</script>
+</body>
+</html>
